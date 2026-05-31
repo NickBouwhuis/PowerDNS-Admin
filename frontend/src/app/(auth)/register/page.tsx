@@ -102,30 +102,22 @@ export default function RegisterPage() {
 
     setIsSubmitting(true);
     try {
-      // Registration goes through the existing web route for now,
-      // since it handles captcha and email verification server-side.
-      // We'll POST as form data to the existing endpoint.
-      const formData = new FormData();
-      formData.append("firstname", form.firstname);
-      formData.append("lastname", form.lastname);
-      formData.append("username", form.username);
-      formData.append("email", form.email);
-      formData.append("password", form.password);
-      formData.append("rpassword", form.rpassword);
+      const res = await api.post<{ status: string; message?: string }>(
+        "/api/v2/auth/register",
+        {
+          firstname: form.firstname,
+          lastname: form.lastname,
+          username: form.username,
+          email: form.email,
+          password: form.password,
+          rpassword: form.rpassword,
+        }
+      );
 
-      const res = await fetch("/register", {
-        method: "POST",
-        credentials: "include",
-        body: formData,
-        redirect: "follow",
-      });
-
-      if (res.redirected || res.ok) {
-        toast.success("Registration successful! Please sign in.");
-        router.push("/login");
-      } else {
-        toast.error("Registration failed. Please try again.");
-      }
+      toast.success(
+        res.message ?? "Registration successful! Please sign in."
+      );
+      router.push("/login");
     } catch (err) {
       if (err instanceof ApiError) {
         toast.error(err.detail);

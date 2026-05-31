@@ -6,6 +6,7 @@ All endpoints return JSON (no redirects, no HTML templates).
 
 Routes:
     POST /api/v2/auth/login           — authenticate with username/password
+    POST /api/v2/auth/register        — self-service local user registration
     POST /api/v2/auth/logout          — clear session
     GET  /api/v2/auth/me              — current user info + role + settings
     GET  /api/v2/auth/settings        — public auth settings (enabled providers)
@@ -51,6 +52,15 @@ class LoginResponse(BaseModel):
     status: str  # "ok", "otp_required", "error"
     message: str | None = None
     user: UserResponse | None = None
+
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    rpassword: str | None = None
+    firstname: str = ""
+    lastname: str = ""
+    email: str = ""
 
 
 class AuthSettingsResponse(BaseModel):
@@ -275,6 +285,61 @@ def auth_settings(request: Request):
         saml_enabled=config.get("SAML_ENABLED", False),
         otp_field_enabled=bool(Setting().get("otp_field_enabled")),
         verify_user_email=bool(Setting().get("verify_user_email")),
+    )
+
+
+@router.post("/register", response_model=LoginResponse, status_code=201)
+def register(request: Request, body: RegisterRequest):
+    """Self-service registration of a new local user.
+
+    Respects the `signup_enabled` and `local_db_enabled` settings. When
+    `verify_user_email` is enabled the account is created unconfirmed and a
+    verification email is sent; otherwise the user can sign in immediately.
+    """
+    from powerdnsadmin.models.setting import Setting
+    from powerdnsadmin.models.user import User
+
+    if not Setting().get("signup_enabled"):
+        raise HTTPException(status_code=403, detail="Registration is disabled")
+    if not Setting().get("local_db_enabled"):
+        raise HTTPException(status_code=400, detail="Local authentication is disabled")
+
+    if not body.username.strip():
+        raise HTTPException(status_code=400, detail="Username is required")
+    if not body.password:
+        raise HTTPException(status_code=400, detail="Password is required")
+    if body.rpassword is not None and body.password != body.rpassword:
+        raise HTTPException(status_code=400, detail="Passwords do not match")
+
+    verify_email = bool(Setting().get("verify_user_email"))
+    if verify_email and not body.email.strip():
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    user = User(
+        username=body.username.strip(),
+        plain_text_password=body.password,
+        firstname=body.firstname,
+        lastname=body.lastname,
+        email=body.email.strip(),
+        confirmed=not verify_email,
+        reload_info=False,
+    )
+    result = user.create_local_user()
+    if result.get("status") is False:
+        raise HTTPException(status_code=400, detail=result.get("msg", "Registration failed"))
+
+    if verify_email:
+        from powerdnsadmin.services.email import send_account_verification
+
+        send_account_verification(user.email)
+        return LoginResponse(
+            status="confirmation_required",
+            message="Please check your email to confirm your account before signing in.",
+        )
+
+    return LoginResponse(
+        status="ok",
+        message="Registration successful. You can now sign in.",
     )
 
 
