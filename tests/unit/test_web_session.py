@@ -37,3 +37,27 @@ def test_request_session_is_exposed_in_scope():
     saved = save.call_args.args[1]
     assert isinstance(saved, SessionData)
     assert saved["oauth_state"] == "abc"
+
+
+def test_db_session_released_around_request():
+    """The event-loop thread's scoped session must be removed before and
+    after each request so it never holds a stale transaction open."""
+    with patch.object(ServerSideSessionMiddleware, "_save_session"), \
+            patch.object(ServerSideSessionMiddleware, "_release_db_session") as rel:
+        TestClient(_make_app()).get("/probe")
+    assert rel.call_count == 2
+
+
+def test_save_session_recovers_from_insert_race():
+    from sqlalchemy.exc import IntegrityError
+    from unittest.mock import MagicMock
+
+    mw = ServerSideSessionMiddleware(app=None, secret_key="x")
+    fake_db = MagicMock()
+    fake_db.session.query.return_value.filter_by.return_value.first.return_value = None
+    fake_db.session.commit.side_effect = [IntegrityError("s", {}, Exception("dup")), None]
+    with patch.dict("sys.modules", {"powerdnsadmin.models.base": MagicMock(db=fake_db)}):
+        mw._save_session("sid", SessionData({"a": 1}))
+    fake_db.session.rollback.assert_called_once()
+    fake_db.session.query.return_value.filter_by.return_value.update.assert_called_once()
+    assert fake_db.session.commit.call_count == 2

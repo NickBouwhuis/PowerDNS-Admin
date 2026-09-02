@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+from sqlalchemy.exc import IntegrityError
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
@@ -147,7 +148,16 @@ class ServerSideSessionMiddleware(BaseHTTPMiddleware):
             )
             db.session.add(record)
 
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            # Another request with the same (new) session id won the insert
+            # race; fall back to updating the row it created.
+            db.session.rollback()
+            db.session.query(Sessions).filter_by(session_id=session_id).update(
+                {"data": data_blob, "expiry": expiry}
+            )
+            db.session.commit()
 
     def _delete_session(self, session_id: str) -> None:
         """Delete a session from the database."""
@@ -157,7 +167,32 @@ class ServerSideSessionMiddleware(BaseHTTPMiddleware):
         db.session.query(Sessions).filter_by(session_id=session_id).delete()
         db.session.commit()
 
+    @staticmethod
+    def _release_db_session() -> None:
+        """Drop the thread-local SQLAlchemy session of the event-loop thread.
+
+        This middleware (and every async route it wraps) runs on the event
+        loop thread, which never goes through the per-request DB cleanup that
+        sync routes get from their dependencies. Without this the thread's
+        session keeps one transaction open forever and, under MySQL's default
+        REPEATABLE READ isolation, stops seeing rows committed by other
+        workers — e.g. a session row inserted by a parallel request, which
+        then surfaces as a duplicate-key error on insert.
+        """
+        from powerdnsadmin.models.base import db
+        if db._scoped_session is not None:
+            db.session.remove()
+
     async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        self._release_db_session()
+        try:
+            return await self._dispatch(request, call_next)
+        finally:
+            self._release_db_session()
+
+    async def _dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
         # Load or create session
