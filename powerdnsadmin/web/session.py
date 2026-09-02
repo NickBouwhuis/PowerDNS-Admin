@@ -170,8 +170,10 @@ class ServerSideSessionMiddleware(BaseHTTPMiddleware):
         else:
             session = self._load_session(session_id)
 
-        # Attach session to request state
+        # Attach session to request state, and expose it in the ASGI scope so
+        # ``request.session`` works too (authlib's Starlette client uses it).
         request.state.session = session
+        request.scope["session"] = session
 
         response = await call_next(request)
 
