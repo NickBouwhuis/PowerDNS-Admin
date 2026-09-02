@@ -35,13 +35,26 @@ def test_forwarded_host_with_port_and_chain():
     assert r.json()["url"] == "https://dns.example.com:8443/cb"
 
 
+def test_loopback_bound_server_trusts_forwarded_headers_regardless_of_client():
+    """Uvicorn rewrites scope['client'] from X-Forwarded-For before we run, so a
+    loopback-bound backend must not depend on the client address."""
+    app = _make_app(trusted="10.0.0.1")
+    client = TestClient(app, base_url="http://127.0.0.1:9191", client=("172.19.0.1", 1234))
+    r = client.get("/cb", headers={
+        "X-Forwarded-For": "172.19.0.1",
+        "X-Forwarded-Host": "dns.example.com",
+        "X-Forwarded-Proto": "https",
+    })
+    assert r.json()["url"] == "https://dns.example.com/cb"
+
+
 def test_forwarded_headers_ignored_from_untrusted_client():
-    client = TestClient(_make_app(trusted="10.0.0.1"), base_url="http://127.0.0.1:9191")
+    client = TestClient(_make_app(trusted="10.0.0.1"), base_url="http://backend.internal:9191")
     r = client.get("/cb", headers={
         "X-Forwarded-Host": "evil.example.com",
         "X-Forwarded-Proto": "https",
     })
-    assert r.json() == {"url": "http://127.0.0.1:9191/cb", "host": "127.0.0.1:9191"}
+    assert r.json() == {"url": "http://backend.internal:9191/cb", "host": "backend.internal:9191"}
 
 
 def test_no_forwarded_headers_is_noop():

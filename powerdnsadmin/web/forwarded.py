@@ -8,10 +8,18 @@ handling only applies ``X-Forwarded-Proto`` and ``X-Forwarded-For``, so
 without this middleware ``request.url_for(...)`` (used for OAuth/OIDC/SAML
 redirect URIs) points at the internal address.
 
-Forwarded headers are only trusted when the direct client is in
-``FORWARDED_ALLOW_IPS`` (comma separated, default ``127.0.0.1``, ``*`` for
-any) — the same setting Uvicorn/Gunicorn use.
+Forwarded headers are trusted when either:
+
+* the backend is listening on a loopback address (the default
+  ``127.0.0.1:9191``) — then every client is necessarily a local proxy; or
+* the direct client is in ``FORWARDED_ALLOW_IPS`` (comma separated, default
+  ``127.0.0.1``, ``*`` for any) — the same setting Uvicorn/Gunicorn use.
+
+The first rule matters because Uvicorn's own proxy-headers middleware runs
+before this one and, when ``X-Forwarded-For`` is present, replaces the client
+address with the forwarded one — so the loopback client is no longer visible.
 """
+import ipaddress
 import os
 
 
@@ -23,8 +31,18 @@ class ForwardedHostMiddleware:
         self.trust_all = raw.strip() == "*"
         self.trusted = {h.strip() for h in raw.split(",") if h.strip()}
 
+    @staticmethod
+    def _is_loopback(host) -> bool:
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return host == "localhost"
+
     def _is_trusted(self, scope) -> bool:
         if self.trust_all:
+            return True
+        server = scope.get("server")
+        if server and self._is_loopback(server[0]):
             return True
         client = scope.get("client")
         return bool(client) and client[0] in self.trusted
