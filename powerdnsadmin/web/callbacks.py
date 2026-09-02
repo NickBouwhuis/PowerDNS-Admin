@@ -17,6 +17,8 @@ import traceback
 
 from distutils.util import strtobool
 
+from authlib.integrations.base_client.errors import OAuthError
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from yaml import Loader, load
@@ -510,7 +512,11 @@ async def oidc_authorized(request: Request):
 
     _ensure_oauth()
     session = get_session(request)
-    token = await _oidc.authorize_access_token(request)
+    try:
+        token = await _oidc.authorize_access_token(request)
+    except OAuthError as e:
+        logger.error("OIDC token exchange failed: %s", e)
+        return RedirectResponse(url="/login?error=oidc_failed", status_code=302)
     if token is None:
         return RedirectResponse(url="/login?error=access_denied", status_code=302)
 

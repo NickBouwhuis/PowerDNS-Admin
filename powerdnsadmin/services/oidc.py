@@ -11,7 +11,13 @@ def oidc_oauth():
         'client_secret': Setting().get('oidc_oauth_secret'),
         'api_base_url': Setting().get('oidc_oauth_api_url'),
         'request_token_url': None,
-        'client_kwargs': {'scope': Setting().get('oidc_oauth_scope')},
+        'client_kwargs': {
+            'scope': Setting().get('oidc_oauth_scope'),
+            # Always use PKCE (S256). Providers that require it (e.g.
+            # Pocket ID, Authentik "public" clients) reject the flow
+            # otherwise; providers that don't simply ignore it.
+            'code_challenge_method': 'S256',
+        },
     }
 
     auto_configure = Setting().get('oidc_oauth_auto_configure')
