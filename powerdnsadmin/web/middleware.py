@@ -74,6 +74,7 @@ def setup_middleware(app: FastAPI, config: dict) -> None:
     Order matters — middleware is applied in reverse order of registration
     (last registered = outermost = runs first).
     """
+    from powerdnsadmin.web.forwarded import ForwardedHostMiddleware
     from powerdnsadmin.web.session import ServerSideSessionMiddleware
 
     # Rate limiting via slowapi (if available)
@@ -106,3 +107,8 @@ def setup_middleware(app: FastAPI, config: dict) -> None:
         cookie_samesite=config.get('SESSION_COOKIE_SAMESITE', 'Lax'),
         cookie_secure=config.get('SESSION_COOKIE_SECURE', False),
     )
+
+    # Honor X-Forwarded-Host/Proto from trusted proxies (Next.js rewrites)
+    # so request.url_for() builds public URLs (OAuth/OIDC/SAML callbacks).
+    # Registered last so it is outermost and runs before everything else.
+    app.add_middleware(ForwardedHostMiddleware)
